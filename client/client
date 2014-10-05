@@ -5,7 +5,7 @@ require 'bundler'
 Bundler.require
 
 
-class WeeDHT
+class Zero10DHT
   def initialize host, port
     @sock = TCPSocket.new(host, port)
   end
@@ -20,6 +20,13 @@ class WeeDHT
     send({
       cmd: 'GET',
       key: key
+    })
+  end
+  def nodeadd host, port
+    send({
+      cmd: 'NODEADD',
+      host: host,
+      port: port.to_s
     })
   end
   def query cmd, key, val
@@ -37,11 +44,11 @@ class WeeDHT
     @sock.recv(2048)
   end
   def self.connect host: 'localhost', port: ARGV[0] || 8002
-    WeeDHT.new(host, port)
+    Zero10DHT.new(host, port)
   end
 end
 
-$weedht = WeeDHT.connect
+$zero10dht = Zero10DHT.connect
 $redis = Redis.connect
 
 
@@ -51,7 +58,7 @@ def bench n
   Benchmark.bm do |x|
     x.report('set:') do
       for i in 1..n do
-        $weedht.set(i, 'banana')
+        $zero10dht.set(i, 'banana')
       end
     end
   end

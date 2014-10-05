@@ -7,16 +7,19 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
-#include <string.h>
+#include <string>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <iostream>
 #include <msgpack.hpp>
 #include <netinet/in.h>
 #include <sparsehash/dense_hash_map>
-#include <ext/hash_map>
 #include <boost/thread.hpp>
+#include <boost/lexical_cast.hpp>
 #include <signal.h>
+#include <netdb.h>
+
+#include <city.h>
 
 #include <tr1/functional>
 #include <tr1/unordered_map>
@@ -24,14 +27,14 @@
 #include <iostream>
 #include <fstream>
 
-//#define DEBUG
+#define DEBUG
 
 using namespace std;
 
 using google::dense_hash_map;      // namespace where class lives by default
 using std::cout;
 using std::endl;
-using __gnu_cxx::hash;  // or __gnu_cxx::hash, or maybe tr1::hash, depending on your OS
+using tr1::hash;  // or __gnu_cxx::hash, or maybe tr1::hash, depending on your OS
 
 void dostuff(int); /* function prototype */
 std::string processCmd(const char*);
@@ -41,6 +44,9 @@ void error(const char *msg)
   exit(1);
 }
 
+uint64 CityHash64CXX(std::string str) {
+  return CityHash64(str.c_str(), str.size());
+}
 
 struct eqstr
 {
@@ -166,6 +172,8 @@ void sighandler(int sig)
     exit(0);
 }
 
+uint64 hostKey;
+
 int main(int argc, char *argv[]) {
   int sockfd, newsockfd, portno, pid;
   socklen_t clilen;
@@ -180,6 +188,10 @@ int main(int argc, char *argv[]) {
   } else {
     portno = atoi(argv[1]);
   }
+
+  hostKey = CityHash64CXX(boost::lexical_cast<std::string>(portno));
+
+  cout << "HOST KEY: " << hostKey << endl;
 
   datastore.set_empty_key("");
 
@@ -242,11 +254,80 @@ void dostuff (int sock)
 #ifdef DEBUG
       cout << "RESP " << resp << endl;
 #endif
+    } else {
+      cout << "CONNECTION LOST" << endl;
+      break;
     }
   }
 }
+
+
+
+class Node {
+  public:
+    std::string host;
+    int port;
+    uint64 key;
+    std::string sendMessage(std::string);
+    template <typename Packer>
+    void msgpack_pack(Packer&) const;
+    void msgpack_unpack(msgpack::object);
+};
+
+vector<Node> knownNodes;
+
+template <typename Packer>
+void Node::msgpack_pack(Packer& pk) const {
+  pk.pack_map(3);
+  pk.pack(std::string("host"));
+  pk.pack(host);
+  pk.pack(std::string("port"));
+  pk.pack(boost::lexical_cast<std::string>(port));
+  pk.pack(std::string("key"));
+  pk.pack(boost::lexical_cast<std::string>(key));
+}
+void Node::msgpack_unpack(msgpack::object o)
+{
+  std::tr1::unordered_map<std::string, std::string> map;
+  try {
+    o.convert(&map);
+  } catch (msgpack::type_error) {
+  }
+  host = map.find("host")->second;
+  port = boost::lexical_cast<int>(map.find("port")->second);
+  key = boost::lexical_cast<uint64>(map.find("key")->second);
+}
+
+std::string Node::sendMessage(std::string message) {
+  int sd, ret;
+  struct sockaddr_in server;
+  //struct in_addr ipv4addr;
+  struct hostent *hp;
+
+  sd = socket(AF_INET,SOCK_STREAM,0);
+  server.sin_family = AF_INET;
+
+  //inet_pton(AF_INET, host.c_str(), &ipv4addr);
+  //hp = gethostbyaddr(&ipv4addr, sizeof ipv4addr, AF_INET);
+  hp = gethostbyname(host.c_str());
+
+  bcopy(hp->h_addr, &(server.sin_addr.s_addr), hp->h_length);
+  server.sin_port = htons(port);
+
+  connect(sd, (const sockaddr *)&server, sizeof(server));
+  send(sd, message.c_str(), message.size(), 0);
+
+  char buffer[256];
+
+  bzero(buffer,256);
+  read(sd,buffer,255);
+  return std::string(buffer);
+}
+
+
+
 std::string processCmd(const char* buffer) {
-  std::string resp;
+  std::string resp = "ERR NO RESP";
   // Deserialize the serialized data.
   msgpack::unpacked msg;
   msgpack::unpack(&msg, buffer, 256);
@@ -260,25 +341,93 @@ std::string processCmd(const char* buffer) {
   }
 
   std::string cmd = map.find("cmd")->second;
-  std::string key = map.find("key")->second;
 #ifdef DEBUG
   cout << obj << endl;
 #endif
-  if (cmd == "SET") {
-    std::string val = map.find("val")->second;
-    if (key.size() == 0) {
-      resp = "ERR INVALID KEY";
-    } else {
-      datastore_mtx.lock();
-      datastore[key.c_str()] = val;
-      datastore_mtx.unlock();
-      resp = "OK";
+  if (cmd == "NODEADD") {
+    Node node;
+    node.host = map.find("host")->second;
+    node.port = atoi(map.find("port")->second.c_str());
+    msgpack::sbuffer buffer;
+    msgpack::packer<msgpack::sbuffer> pk2(&buffer);
+    pk2.pack_map(3);
+    pk2.pack(std::string("cmd"));
+    pk2.pack(std::string("NODEINTRO"));
+    pk2.pack(std::string("hash"));
+    pk2.pack(boost::lexical_cast<std::string>(hostKey));
+
+    pk2.pack(std::string("knownNodes"));
+    msgpack::sbuffer sbuf;
+    msgpack::pack(sbuf, knownNodes);
+    pk2.pack(std::string(sbuf.data()));
+
+    std::string hash = node.sendMessage(std::string(buffer.data()));
+    cout << "HASH " << hash << endl;
+    msgpack::unpacked msg2;
+    msgpack::unpack(&msg2, hash.c_str(), hash.size());
+    cout << "UPACKED" << endl;
+    std::tr1::unordered_map<std::string, std::string> map;
+    msgpack::object obj3 = msg2.get();
+    try {
+      obj3.convert(&map);
+    } catch (msgpack::type_error) {
+      return "ERR BAD CMD";
     }
-  } else if (cmd == "GET") {
-    datastore_mtx.lock();
-    resp = datastore[key.c_str()];
-    datastore_mtx.unlock();
-    if (resp.size() == 0) resp = "ERR NOT FOUND";
+    node.key = boost::lexical_cast<uint64>(map.find("hash")->second);
+    cout << "NODE HASH: " << node.key << endl;
+    knownNodes.push_back(node);
+
+    std::string remoteKNStr =  map.find("knownNodes")->second;
+    cout << "RKNs " << remoteKNStr << endl;
+    msgpack::unpacked msg3;
+    msgpack::unpack(&msg3, remoteKNStr.c_str(), remoteKNStr.size());
+
+    msgpack::object obj2 = msg3.get();
+    vector<Node> remoteKnownNodes;
+
+    try {
+      obj2.convert(&remoteKnownNodes);
+    } catch (msgpack::type_error) {
+      return "ERR BAD CMD";
+    }
+
+    cout << "REMOTE KNs " << obj2 << endl;
+
+    resp = "OK";
+  } else if (cmd == "NODEINTRO") {
+
+    msgpack::sbuffer buffer;
+    msgpack::packer<msgpack::sbuffer> pk2(&buffer);
+    pk2.pack_map(3);
+    pk2.pack(std::string("hash"));
+    pk2.pack(boost::lexical_cast<std::string>(hostKey));
+
+    pk2.pack(std::string("knownNodes"));
+    msgpack::sbuffer sbuf;
+    msgpack::pack(sbuf, knownNodes);
+    pk2.pack(std::string(sbuf.data()));
+    resp = std::string(buffer.data());
+
+
+  } else if (cmd == "SET" || cmd == "GET") {
+    std::string key = map.find("key")->second;
+    uint64 hashedKey = CityHash64CXX(key);
+    if (cmd == "SET") {
+      std::string val = map.find("val")->second;
+      if (key.size() == 0) {
+        resp = "ERR INVALID KEY";
+      } else {
+        datastore_mtx.lock();
+        datastore[key.c_str()] = val;
+        datastore_mtx.unlock();
+        resp = "OK";
+      }
+    } else if (cmd == "GET") {
+      datastore_mtx.lock();
+      resp = datastore[key.c_str()];
+      datastore_mtx.unlock();
+      if (resp.size() == 0) resp = "ERR NOT FOUND";
+    }
   } else {
     resp = "ERR UNKNOWN CMD";
   }
