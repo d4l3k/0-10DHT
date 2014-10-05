@@ -1,0 +1,71 @@
+#!/usr/bin/env ruby
+
+
+require 'bundler'
+Bundler.require
+
+
+class WeeDHT
+  def initialize host, port
+    @sock = TCPSocket.new(host, port)
+  end
+  def set key, value
+    send({
+      cmd: 'SET',
+      key: key,
+      val: value
+    })
+  end
+  def get key
+    send({
+      cmd: 'GET',
+      key: key
+    })
+  end
+  def query cmd, key, val
+    send({
+      cmd: cmd,
+      key: key,
+      val: val
+    })
+  end
+  def send obj
+    if obj.has_key? :key
+      obj[:key] = obj[:key].to_s
+    end
+    @sock.write(MessagePack.pack(obj))
+    @sock.recv(2048)
+  end
+  def self.connect host: 'localhost', port: ARGV[0] || 8002
+    WeeDHT.new(host, port)
+  end
+end
+
+$weedht = WeeDHT.connect
+$redis = Redis.connect
+
+
+def bench n
+  require 'benchmark'
+
+  Benchmark.bm do |x|
+    x.report('set:') do
+      for i in 1..n do
+        $weedht.set(i, 'banana')
+      end
+    end
+  end
+end
+def bench_redis n
+  require 'benchmark'
+
+  Benchmark.bm do |x|
+    x.report('redis-set:') do
+      for i in 1..n do
+        $redis.set(i, 'banana')
+      end
+    end
+  end
+end
+
+binding.pry
