@@ -376,9 +376,26 @@ string Node::sendMessage(string message) {
 
   bzero(buffer,256);
   read(sd,buffer,255);
+  close(sd);
   return string(buffer);
 }
 string Node::introduceMyself() {
+
+  bool found = false;
+  for(vector<Node>::iterator it2 = knownNodes.begin(); it2 != knownNodes.end(); ++it2) {
+    if (it2->equals(*this)) {
+      found = true;
+      break;
+    }
+  }
+
+  // Check trying to add self.
+  if (found) {
+    return "ERR ALREADY ADDED";
+  } else if (key == hostKey) {
+    return "ERR SELF";
+  }
+
   msgpack::sbuffer buffer;
   msgpack::packer<msgpack::sbuffer> pk2(&buffer);
   pk2.pack_map(4);
@@ -392,6 +409,7 @@ string Node::introduceMyself() {
   pk2.pack(knownNodes);
 
   string hash = sendMessage(string(buffer.data()));
+
   msgpack::unpacked msg2;
   msgpack::unpack(&msg2, hash.c_str(), hash.size());
   std::tr1::unordered_map<string, msgpack::object> map;
@@ -407,18 +425,7 @@ string Node::introduceMyself() {
     return "ERR BAD CMD";
   }
 
-  bool found = false;
-  for(vector<Node>::iterator it2 = knownNodes.begin(); it2 != knownNodes.end(); ++it2) {
-    if (it2->equals(*this)) {
-      found = true;
-      break;
-    }
-  }
-  // Check trying to add self.
-  if (!found && key != hostKey) {
-    knownNodes.push_back(*this);
-  }
-
+  knownNodes.push_back(*this);
   addNodes(remoteKnownNodes);
 
   return "OK";
