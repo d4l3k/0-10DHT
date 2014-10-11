@@ -29,6 +29,8 @@
 
 #define DEBUG
 
+// Uses:
+
 using namespace std;
 
 using google::dense_hash_map;      // namespace where class lives by default
@@ -36,15 +38,37 @@ using std::cout;
 using std::endl;
 using tr1::hash;  // or __gnu_cxx::hash, or maybe tr1::hash, depending on your OS
 
+// Data Definitions:
+
+class Node {
+  public:
+    string host;
+    int port;
+    uint64 key;
+    string sendMessage(string);
+    template <typename Packer>
+    void msgpack_pack(Packer&) const;
+    void msgpack_unpack(msgpack::object);
+    bool equals(Node);
+    string introduceMyself();
+    friend std::ostream& operator<< (std::ostream&, Node const&);
+};
+
+// Headers:
+
 void dostuff(int); /* function prototype */
-std::string processCmd(const char*);
+string processCmd(const char*);
+int addNodes(vector<Node>);
+
+// Functions:
+
 void error(const char *msg)
 {
   cout << "ERROR: " << msg << endl;
   exit(1);
 }
 
-uint64 CityHash64CXX(std::string str) {
+uint64 CityHash64CXX(string str) {
   return CityHash64(str.c_str(), str.size());
 }
 
@@ -56,10 +80,10 @@ struct eqstr
   }
 };
 
-dense_hash_map<const char*, std::string, hash<const char*>, eqstr> datastore;
+dense_hash_map<const char*, string, hash<const char*>, eqstr> datastore;
 boost::mutex datastore_mtx;           // mutex for critical section
 struct StringToIntSerializer {
-  bool operator()(FILE* fp, const std::pair<const char*, std::string>& value) const {
+  bool operator()(FILE* fp, const std::pair<const char*, string>& value) const {
 
     msgpack::sbuffer sbuf;
 
@@ -67,11 +91,11 @@ struct StringToIntSerializer {
 
     msgpack::packer<msgpack::sbuffer> pk2(&sbuf);
     pk2.pack_map(3);
-    pk2.pack(std::string("cmd"));
-    pk2.pack(std::string("SET"));
-    pk2.pack(std::string("key"));
-    pk2.pack(std::string(value.first));
-    pk2.pack(std::string("val"));
+    pk2.pack(string("cmd"));
+    pk2.pack(string("SET"));
+    pk2.pack(string("key"));
+    pk2.pack(string(value.first));
+    pk2.pack(string("val"));
     pk2.pack(value.second);
 
     //cout << "DATA: " << sbuf.data() << endl;
@@ -94,7 +118,7 @@ struct StringToIntSerializer {
     return true;
   }
   // This doesn't work.
-  bool operator()(FILE* fp, std::pair<const char*, std::string>* value) const {
+  bool operator()(FILE* fp, std::pair<const char*, string>* value) const {
     char* line;
     size_t len = 0;
     if (!getline(&line, &len, fp)) {
@@ -139,7 +163,7 @@ int load() {
     }
     */
 
-    std::string line;
+    string line;
     while (std::getline(infile, line)) {
       if (first) {
         first = false;
@@ -164,18 +188,26 @@ int save() {
   cout << "Done!" << endl;
   return 0;
 }
-
+int sockfd;
 void sighandler(int sig)
 {
-    cout<< "Signal " << sig << " caught..." << endl;
-    save();
-    exit(0);
+  cout<< "Signal " << sig << " caught..." << endl;
+  close(sockfd);
+  int yes=1;
+  //char yes='1'; // use this under Solaris
+
+  if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+      perror("setsockopt");
+      exit(1);
+  }
+  save();
+  exit(0);
 }
 
 uint64 hostKey;
 
 int main(int argc, char *argv[]) {
-  int sockfd, newsockfd, portno, pid;
+  int newsockfd, portno, pid;
   socklen_t clilen;
   struct sockaddr_in serv_addr, cli_addr;
 
@@ -189,11 +221,12 @@ int main(int argc, char *argv[]) {
     portno = atoi(argv[1]);
   }
 
-  hostKey = CityHash64CXX(boost::lexical_cast<std::string>(portno));
+  hostKey = CityHash64CXX(boost::lexical_cast<string>(portno));
 
   cout << "HOST KEY: " << hostKey << endl;
 
   datastore.set_empty_key("");
+  datastore.resize(100);
 
   load();
 
@@ -248,7 +281,7 @@ void dostuff (int sock)
       error("ERROR reading from socket");
       break;
     } else if(n > 0) {
-      std::string resp = processCmd(buffer);
+      string resp = processCmd(buffer);
       n = write(sock, resp.c_str(), resp.size());
       if (n < 0) error("ERROR writing to socket");
 #ifdef DEBUG
@@ -263,42 +296,41 @@ void dostuff (int sock)
 
 
 
-class Node {
-  public:
-    std::string host;
-    int port;
-    uint64 key;
-    std::string sendMessage(std::string);
-    template <typename Packer>
-    void msgpack_pack(Packer&) const;
-    void msgpack_unpack(msgpack::object);
-};
 
 vector<Node> knownNodes;
 
 template <typename Packer>
 void Node::msgpack_pack(Packer& pk) const {
   pk.pack_map(3);
-  pk.pack(std::string("host"));
+  pk.pack(string("host"));
   pk.pack(host);
-  pk.pack(std::string("port"));
-  pk.pack(boost::lexical_cast<std::string>(port));
-  pk.pack(std::string("key"));
-  pk.pack(boost::lexical_cast<std::string>(key));
+  pk.pack(string("port"));
+  pk.pack(port);
+  pk.pack(string("key"));
+  pk.pack(key);
 }
 void Node::msgpack_unpack(msgpack::object o)
 {
-  std::tr1::unordered_map<std::string, std::string> map;
+  std::tr1::unordered_map<string, msgpack::object> map;
   try {
     o.convert(&map);
   } catch (msgpack::type_error) {
   }
-  host = map.find("host")->second;
-  port = boost::lexical_cast<int>(map.find("port")->second);
-  key = boost::lexical_cast<uint64>(map.find("key")->second);
+  map.find("host")->second.convert(&host);
+  map.find("port")->second.convert(&port);
+  map.find("key")->second.convert(&key);
 }
 
-std::string Node::sendMessage(std::string message) {
+bool Node::equals(Node n) {
+  return key == n.key;
+}
+
+std::ostream& operator<< (std::ostream& o, Node const& n)
+{
+  return o << "{ " << n.key << ", " << n.host << ":" << n.port << " }";
+}
+
+string Node::sendMessage(string message) {
   int sd, ret;
   struct sockaddr_in server;
   //struct in_addr ipv4addr;
@@ -314,106 +346,151 @@ std::string Node::sendMessage(std::string message) {
   bcopy(hp->h_addr, &(server.sin_addr.s_addr), hp->h_length);
   server.sin_port = htons(port);
 
-  connect(sd, (const sockaddr *)&server, sizeof(server));
+  if (connect(sd, (const sockaddr *)&server, sizeof(server)) != 0) {
+    return "ERR BAD ADDRESS";
+  }
   send(sd, message.c_str(), message.size(), 0);
 
   char buffer[256];
 
   bzero(buffer,256);
   read(sd,buffer,255);
-  return std::string(buffer);
+  return string(buffer);
+}
+string Node::introduceMyself() {
+  msgpack::sbuffer buffer;
+  msgpack::packer<msgpack::sbuffer> pk2(&buffer);
+  pk2.pack_map(3);
+  pk2.pack(string("cmd"));
+  pk2.pack(string("NODEINTRO"));
+  pk2.pack(string("hash"));
+  pk2.pack(hostKey);
+
+  pk2.pack(string("knownNodes"));
+  msgpack::sbuffer sbuf;
+  msgpack::pack(sbuf, knownNodes);
+
+  pk2.pack(knownNodes);
+
+  string hash = sendMessage(string(buffer.data()));
+  msgpack::unpacked msg2;
+  msgpack::unpack(&msg2, hash.c_str(), hash.size());
+  std::tr1::unordered_map<string, msgpack::object> map;
+  msgpack::object obj3 = msg2.get();
+  try {
+    obj3.convert(&map);
+  } catch (msgpack::type_error) {
+    return "ERR BAD CMD";
+  }
+  map.find("hash")->second.convert(&key);
+
+  bool found = false;
+  for(vector<Node>::iterator it2 = knownNodes.begin(); it2 != knownNodes.end(); ++it2) {
+    if (it2->equals(*this)) {
+      found = true;
+      break;
+    }
+  }
+  // Check trying to add self.
+  if (!found && key != hostKey) {
+    knownNodes.push_back(*this);
+  }
+
+  vector<Node> remoteKnownNodes;
+
+  try {
+    map.find("knownNodes")->second.convert(&remoteKnownNodes);
+  } catch (msgpack::type_error) {
+    return "ERR BAD CMD";
+  }
+
+  addNodes(remoteKnownNodes);
+
+  return "OK";
+}
+
+int addNodes(vector<Node> nodes) {
+  int added = 0;
+  for(vector<Node>::iterator it = nodes.begin(); it != nodes.end(); ++it) {
+    // Check if node is us.
+    bool found = false;
+    for(vector<Node>::iterator it2 = knownNodes.begin(); it2 != knownNodes.end(); ++it2) {
+      if (it->equals(*it2)) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      cout << "Adding node: " << *it << endl;
+      added++;
+      it->introduceMyself();
+    }
+  }
+  return added;
 }
 
 
 
-std::string processCmd(const char* buffer) {
-  std::string resp = "ERR NO RESP";
+string processCmd(const char* buffer) {
+  string resp = "ERR NO RESP";
   // Deserialize the serialized data.
   msgpack::unpacked msg;
   msgpack::unpack(&msg, buffer, 256);
   msgpack::object obj = msg.get();
 
-  std::tr1::unordered_map<std::string, std::string> map;
+  cout << obj << endl;
+
+  std::tr1::unordered_map<string, msgpack::object> map;
   try {
     obj.convert(&map);
   } catch (msgpack::type_error) {
     return "ERR BAD CMD";
   }
 
-  std::string cmd = map.find("cmd")->second;
-#ifdef DEBUG
-  cout << obj << endl;
-#endif
+  string cmd;
+  map.find("cmd")->second.convert(&cmd);
   if (cmd == "NODEADD") {
     Node node;
-    node.host = map.find("host")->second;
-    node.port = atoi(map.find("port")->second.c_str());
-    msgpack::sbuffer buffer;
-    msgpack::packer<msgpack::sbuffer> pk2(&buffer);
-    pk2.pack_map(3);
-    pk2.pack(std::string("cmd"));
-    pk2.pack(std::string("NODEINTRO"));
-    pk2.pack(std::string("hash"));
-    pk2.pack(boost::lexical_cast<std::string>(hostKey));
 
-    pk2.pack(std::string("knownNodes"));
-    msgpack::sbuffer sbuf;
-    msgpack::pack(sbuf, knownNodes);
-    pk2.pack(std::string(sbuf.data()));
+    map.find("host")->second.convert(&node.host);
+    map.find("port")->second.convert(&node.port);
 
-    std::string hash = node.sendMessage(std::string(buffer.data()));
-    cout << "HASH " << hash << endl;
-    msgpack::unpacked msg2;
-    msgpack::unpack(&msg2, hash.c_str(), hash.size());
-    cout << "UPACKED" << endl;
-    std::tr1::unordered_map<std::string, std::string> map;
-    msgpack::object obj3 = msg2.get();
-    try {
-      obj3.convert(&map);
-    } catch (msgpack::type_error) {
-      return "ERR BAD CMD";
-    }
-    node.key = boost::lexical_cast<uint64>(map.find("hash")->second);
-    cout << "NODE HASH: " << node.key << endl;
-    knownNodes.push_back(node);
+    return node.introduceMyself();
 
-    std::string remoteKNStr =  map.find("knownNodes")->second;
-    cout << "RKNs " << remoteKNStr << endl;
-    msgpack::unpacked msg3;
-    msgpack::unpack(&msg3, remoteKNStr.c_str(), remoteKNStr.size());
+  } else if (cmd == "NODEINTRO") {
 
-    msgpack::object obj2 = msg3.get();
+    // Read knownNodes
+
     vector<Node> remoteKnownNodes;
 
     try {
-      obj2.convert(&remoteKnownNodes);
+      map.find("knownNodes")->second.convert(&remoteKnownNodes);
     } catch (msgpack::type_error) {
       return "ERR BAD CMD";
     }
 
-    cout << "REMOTE KNs " << obj2 << endl;
+    addNodes(remoteKnownNodes);
 
-    resp = "OK";
-  } else if (cmd == "NODEINTRO") {
+    // Respond with our info
 
     msgpack::sbuffer buffer;
     msgpack::packer<msgpack::sbuffer> pk2(&buffer);
-    pk2.pack_map(3);
-    pk2.pack(std::string("hash"));
-    pk2.pack(boost::lexical_cast<std::string>(hostKey));
+    pk2.pack_map(2);
+    pk2.pack(string("hash"));
+    pk2.pack(hostKey);
 
-    pk2.pack(std::string("knownNodes"));
-    msgpack::sbuffer sbuf;
-    msgpack::pack(sbuf, knownNodes);
-    pk2.pack(std::string(sbuf.data()));
-    resp = std::string(buffer.data());
+    pk2.pack(string("knownNodes"));
+    pk2.pack(knownNodes);
+    resp = string(buffer.data());
 
 
   } else if (cmd == "SET" || cmd == "GET") {
-    std::string key = map.find("key")->second;
+    string key;
+    map.find("key")->second.convert(&key);
     uint64 hashedKey = CityHash64CXX(key);
     if (cmd == "SET") {
-      std::string val = map.find("val")->second;
+      string val;
+      map.find("val")->second.convert(&val);
       if (key.size() == 0) {
         resp = "ERR INVALID KEY";
       } else {

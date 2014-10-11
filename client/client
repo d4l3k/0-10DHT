@@ -26,7 +26,7 @@ class Zero10DHT
     send({
       cmd: 'NODEADD',
       host: host,
-      port: port.to_s
+      port: port.to_i
     })
   end
   def query cmd, key, val
