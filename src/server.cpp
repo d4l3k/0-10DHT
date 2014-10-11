@@ -181,7 +181,7 @@ int load() {
 int save() {
   cout << "Saving..." << endl;
   datastore_mtx.lock();
-  FILE* fp = fopen("weedht.db", "w");
+  FILE* fp = fopen(DBFILE, "w");
   datastore.serialize(StringToIntSerializer(), fp);
   datastore_mtx.unlock();
   fclose(fp);
