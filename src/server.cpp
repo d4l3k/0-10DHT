@@ -18,6 +18,7 @@
 #include <boost/lexical_cast.hpp>
 #include <signal.h>
 #include <netdb.h>
+#include <cmath>
 
 #include <city.h>
 
@@ -57,7 +58,7 @@ class Node {
 // Headers:
 
 void dostuff(int); /* function prototype */
-string processCmd(const char*);
+string processCmd(int, const char*);
 int addNodes(vector<Node>);
 
 // Functions:
@@ -70,6 +71,15 @@ void error(const char *msg)
 
 uint64 CityHash64CXX(string str) {
   return CityHash64(str.c_str(), str.size());
+}
+uint64 hashDistance(uint64 a, uint64 b) {
+  uint64 d = a - b;
+  uint64 e = UINT_MAX - (a - b);
+  if (d < e) {
+    return d;
+  } else {
+    return e;
+  }
 }
 
 struct eqstr
@@ -154,15 +164,6 @@ int load() {
     // Skip first
     bool first = true;
 
-    /*char * line = NULL;
-    size_t len = 0;
-    ssize_t read;
-
-
-    while ((read = getline(&line, &len, fp)) != -1) {
-    }
-    */
-
     string line;
     while (std::getline(infile, line)) {
       if (first) {
@@ -192,7 +193,6 @@ int sockfd;
 void sighandler(int sig)
 {
   cout<< "Signal " << sig << " caught..." << endl;
-  close(sockfd);
   int yes=1;
   //char yes='1'; // use this under Solaris
 
@@ -200,6 +200,7 @@ void sighandler(int sig)
       perror("setsockopt");
       exit(1);
   }
+  close(sockfd);
   save();
   exit(0);
 }
@@ -281,7 +282,7 @@ void dostuff (int sock)
       error("ERROR reading from socket");
       break;
     } else if(n > 0) {
-      string resp = processCmd(buffer);
+      string resp = processCmd(sock, buffer);
       n = write(sock, resp.c_str(), resp.size());
       if (n < 0) error("ERROR writing to socket");
 #ifdef DEBUG
@@ -294,7 +295,27 @@ void dostuff (int sock)
   }
 }
 
+string getSockIP(int s) {
+  socklen_t len;
+  struct sockaddr_storage addr;
+  char ipstr[INET6_ADDRSTRLEN];
+  int port;
 
+  len = sizeof addr;
+  getpeername(s, (struct sockaddr*)&addr, &len);
+
+  // deal with both IPv4 and IPv6:
+  if (addr.ss_family == AF_INET) {
+      struct sockaddr_in *s = (struct sockaddr_in *)&addr;
+      port = ntohs(s->sin_port);
+      inet_ntop(AF_INET, &s->sin_addr, ipstr, sizeof ipstr);
+  } else { // AF_INET6
+      struct sockaddr_in6 *s = (struct sockaddr_in6 *)&addr;
+      port = ntohs(s->sin6_port);
+      inet_ntop(AF_INET6, &s->sin6_addr, ipstr, sizeof ipstr);
+  }
+  return ipstr;
+}
 
 
 vector<Node> knownNodes;
@@ -314,11 +335,11 @@ void Node::msgpack_unpack(msgpack::object o)
   std::tr1::unordered_map<string, msgpack::object> map;
   try {
     o.convert(&map);
+    map.find("host")->second.convert(&host);
+    map.find("port")->second.convert(&port);
+    map.find("key")->second.convert(&key);
   } catch (msgpack::type_error) {
   }
-  map.find("host")->second.convert(&host);
-  map.find("port")->second.convert(&port);
-  map.find("key")->second.convert(&key);
 }
 
 bool Node::equals(Node n) {
@@ -360,16 +381,14 @@ string Node::sendMessage(string message) {
 string Node::introduceMyself() {
   msgpack::sbuffer buffer;
   msgpack::packer<msgpack::sbuffer> pk2(&buffer);
-  pk2.pack_map(3);
+  pk2.pack_map(4);
   pk2.pack(string("cmd"));
   pk2.pack(string("NODEINTRO"));
-  pk2.pack(string("hash"));
+  pk2.pack(string("port"));
+  pk2.pack(port);
+  pk2.pack(string("key"));
   pk2.pack(hostKey);
-
   pk2.pack(string("knownNodes"));
-  msgpack::sbuffer sbuf;
-  msgpack::pack(sbuf, knownNodes);
-
   pk2.pack(knownNodes);
 
   string hash = sendMessage(string(buffer.data()));
@@ -377,12 +396,16 @@ string Node::introduceMyself() {
   msgpack::unpack(&msg2, hash.c_str(), hash.size());
   std::tr1::unordered_map<string, msgpack::object> map;
   msgpack::object obj3 = msg2.get();
+
+  vector<Node> remoteKnownNodes;
+
   try {
     obj3.convert(&map);
+    map.find("hash")->second.convert(&key);
+    map.find("knownNodes")->second.convert(&remoteKnownNodes);
   } catch (msgpack::type_error) {
     return "ERR BAD CMD";
   }
-  map.find("hash")->second.convert(&key);
 
   bool found = false;
   for(vector<Node>::iterator it2 = knownNodes.begin(); it2 != knownNodes.end(); ++it2) {
@@ -394,14 +417,6 @@ string Node::introduceMyself() {
   // Check trying to add self.
   if (!found && key != hostKey) {
     knownNodes.push_back(*this);
-  }
-
-  vector<Node> remoteKnownNodes;
-
-  try {
-    map.find("knownNodes")->second.convert(&remoteKnownNodes);
-  } catch (msgpack::type_error) {
-    return "ERR BAD CMD";
   }
 
   addNodes(remoteKnownNodes);
@@ -429,9 +444,63 @@ int addNodes(vector<Node> nodes) {
   return added;
 }
 
+// Finds node with the closest key.
+string passOrOperateCmd(const char* buffer, tr1::unordered_map<string, msgpack::object> map) {
+  string cmd, key;
 
+  try {
+    map.find("cmd")->second.convert(&cmd);
+    map.find("key")->second.convert(&key);
+  } catch (msgpack::type_error) {
+    return "ERR BAD CMD";
+  }
 
-string processCmd(const char* buffer) {
+  uint64 hashedKey = CityHash64CXX(key);
+
+  Node* best = NULL;
+
+  uint64 bestDist = hashDistance(hashedKey, hostKey);
+
+  for(vector<Node>::iterator it = knownNodes.begin(); it != knownNodes.end(); ++it) {
+    uint64 itDist = hashDistance(hashedKey, it->key);
+    if (itDist < bestDist) {
+      bestDist = itDist;
+      best = &*it;
+    }
+  }
+
+  if (best != NULL) {
+    cout << "Forwarding request to: " << *best << endl;
+    return best->sendMessage(buffer);
+  }
+
+  string resp;
+
+  if (cmd == "SET") {
+    string val;
+    try {
+      map.find("val")->second.convert(&val);
+    } catch (msgpack::type_error) {
+      return "ERR BAD CMD";
+    }
+    if (key.size() == 0) {
+      resp = "ERR INVALID KEY";
+    } else {
+      datastore_mtx.lock();
+      datastore[key.c_str()] = val;
+      datastore_mtx.unlock();
+      resp = "OK";
+    }
+  } else if (cmd == "GET") {
+    datastore_mtx.lock();
+    resp = datastore[key.c_str()];
+    datastore_mtx.unlock();
+    if (resp.size() == 0) resp = "ERR NOT FOUND";
+  }
+  return resp;
+}
+
+string processCmd(int sock, const char* buffer) {
   string resp = "ERR NO RESP";
   // Deserialize the serialized data.
   msgpack::unpacked msg;
@@ -440,20 +509,25 @@ string processCmd(const char* buffer) {
 
   cout << obj << endl;
 
-  std::tr1::unordered_map<string, msgpack::object> map;
+  tr1::unordered_map<string, msgpack::object> map;
+
+  string cmd;
   try {
     obj.convert(&map);
+    map.find("cmd")->second.convert(&cmd);
   } catch (msgpack::type_error) {
     return "ERR BAD CMD";
   }
 
-  string cmd;
-  map.find("cmd")->second.convert(&cmd);
   if (cmd == "NODEADD") {
     Node node;
 
-    map.find("host")->second.convert(&node.host);
-    map.find("port")->second.convert(&node.port);
+    try {
+      map.find("host")->second.convert(&node.host);
+      map.find("port")->second.convert(&node.port);
+    } catch (msgpack::type_error) {
+      return "ERR BAD CMD";
+    }
 
     return node.introduceMyself();
 
@@ -463,48 +537,40 @@ string processCmd(const char* buffer) {
 
     vector<Node> remoteKnownNodes;
 
+    Node node;
+
+    node.host = getSockIP(sock);
+
     try {
       map.find("knownNodes")->second.convert(&remoteKnownNodes);
+      map.find("port")->second.convert(&node.port);
+      map.find("key")->second.convert(&node.key);
     } catch (msgpack::type_error) {
       return "ERR BAD CMD";
     }
+
+    remoteKnownNodes.push_back(node);
 
     addNodes(remoteKnownNodes);
 
     // Respond with our info
 
-    msgpack::sbuffer buffer;
-    msgpack::packer<msgpack::sbuffer> pk2(&buffer);
+    msgpack::sbuffer buffer2;
+    msgpack::packer<msgpack::sbuffer> pk2(&buffer2);
     pk2.pack_map(2);
     pk2.pack(string("hash"));
     pk2.pack(hostKey);
 
     pk2.pack(string("knownNodes"));
     pk2.pack(knownNodes);
-    resp = string(buffer.data());
-
-
+    resp = string(buffer2.data());
+  } else if (cmd == "NODES") {
+    msgpack::sbuffer buf;
+    msgpack::packer<msgpack::sbuffer> pk(&buf);
+    pk.pack(knownNodes);
+    resp = string(buf.data());
   } else if (cmd == "SET" || cmd == "GET") {
-    string key;
-    map.find("key")->second.convert(&key);
-    uint64 hashedKey = CityHash64CXX(key);
-    if (cmd == "SET") {
-      string val;
-      map.find("val")->second.convert(&val);
-      if (key.size() == 0) {
-        resp = "ERR INVALID KEY";
-      } else {
-        datastore_mtx.lock();
-        datastore[key.c_str()] = val;
-        datastore_mtx.unlock();
-        resp = "OK";
-      }
-    } else if (cmd == "GET") {
-      datastore_mtx.lock();
-      resp = datastore[key.c_str()];
-      datastore_mtx.unlock();
-      if (resp.size() == 0) resp = "ERR NOT FOUND";
-    }
+    resp = passOrOperateCmd(buffer, map);
   } else {
     resp = "ERR UNKNOWN CMD";
   }

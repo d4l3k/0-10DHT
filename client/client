@@ -9,11 +9,14 @@ class Zero10DHT
   def initialize host, port
     @sock = TCPSocket.new(host, port)
   end
+  def nodes
+    MessagePack.unpack(send({cmd: 'NODES'}))
+  end
   def set key, value
     send({
       cmd: 'SET',
       key: key,
-      val: value
+      val: value.to_s
     })
   end
   def get key
