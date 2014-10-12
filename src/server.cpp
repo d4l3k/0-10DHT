@@ -429,7 +429,7 @@ string Node::introduceMyself() {
 
   try {
     obj3.convert(&map);
-    map["hash"].convert(&key);
+    map["key"].convert(&key);
     map["knownNodes"].convert(&remoteKnownNodes);
   } catch (msgpack::type_error) {
     return "ERR BAD CMD";
@@ -575,15 +575,23 @@ string processCmd(int sock, const char* buffer) {
     msgpack::sbuffer buffer2;
     msgpack::packer<msgpack::sbuffer> pk2(&buffer2);
     pk2.pack_map(2);
-    pk2.pack(string("hash"));
+    pk2.pack(string("key"));
     pk2.pack(hostKey);
 
     pk2.pack(string("knownNodes"));
     pk2.pack(knownNodes);
     resp = string(buffer2.data());
   } else if (cmd == "NODEKEYS") {
-    tr1::unordered_map<string, string> map;
     vector<string> keys;
+    for(HASHTYPE::iterator it = datastore.begin(); it != datastore.end(); ++it) {
+      keys.push_back(it->first);
+    }
+    msgpack::sbuffer buf;
+    msgpack::packer<msgpack::sbuffer> pk(&buf);
+    pk.pack(keys);
+    resp = buf.data();
+  } else if (cmd == "NODEDUMPMAP") {
+    tr1::unordered_map<string, string> map;
     for(HASHTYPE::iterator it = datastore.begin(); it != datastore.end(); ++it) {
       map[it->first] = it->second;
     }
