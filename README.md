@@ -3,10 +3,11 @@
 
 0/10 Distributed Hash Table. It'll probably lose your data and ruin your life.
 
-
 ## Commands
 
 Commands sent to 0/10 DHT nodes are formated with [MessagePack](http://msgpack.org/). It's a binary version of JSON. This means it's a little bit smaller. The commands listed below are written in JSON and must be packed before being sent.
+
+There is a reference implementation of the client written in Ruby in the `client/` folder.
 
 ### Data Manipulation Commands
 
