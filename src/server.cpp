@@ -1,8 +1,4 @@
-/* A simple server in the internet domain using TCP
-   The port number is passed as an argument
-   This version runs forever, forking off a separate
-   process for each connection
-*/
+#define SPARSEHASH
 
 #include <stdio.h>
 #include <unistd.h>
@@ -13,7 +9,12 @@
 #include <iostream>
 #include <msgpack.hpp>
 #include <netinet/in.h>
+
+#ifdef SPARSEHASH
 #include <sparsehash/dense_hash_map>
+using google::dense_hash_map;
+#endif
+
 #include <boost/thread.hpp>
 #include <boost/lexical_cast.hpp>
 #include <signal.h>
@@ -30,11 +31,11 @@
 
 #define DEBUG
 
+
 // Uses:
 
 using namespace std;
 
-using google::dense_hash_map;      // namespace where class lives by default
 using std::cout;
 using std::endl;
 using tr1::hash;  // or __gnu_cxx::hash, or maybe tr1::hash, depending on your OS
@@ -89,11 +90,23 @@ struct eqstr
     return (s1 == s2) || (s1 && s2 && strcmp(s1, s2) == 0);
   }
 };
+struct eqstring
+{
+  bool operator()(string s1, string s2) const
+  {
+    return (s1 == s2) || (s1.compare(s2) == 0);
+  }
+};
+#ifdef SPARSEHASH
+#define HASHTYPE dense_hash_map<string, string, hash<string>, eqstring>
+#else
+#define HASHTYPE tr1::unordered_map<string, string>
+#endif
+HASHTYPE datastore;
+boost::mutex datastore_mtx;
 
-dense_hash_map<const char*, string, hash<const char*>, eqstr> datastore;
-boost::mutex datastore_mtx;           // mutex for critical section
 struct StringToIntSerializer {
-  bool operator()(FILE* fp, const std::pair<const char*, string>& value) const {
+  bool operator()(FILE* fp, const std::pair<string, string>& value) const {
 
     msgpack::sbuffer sbuf;
 
@@ -128,7 +141,7 @@ struct StringToIntSerializer {
     return true;
   }
   // This doesn't work.
-  bool operator()(FILE* fp, std::pair<const char*, string>* value) const {
+  bool operator()(FILE* fp, std::pair<string, string>* value) const {
     char* line;
     size_t len = 0;
     if (!getline(&line, &len, fp)) {
@@ -169,6 +182,7 @@ int load() {
       if (first) {
         first = false;
       } else {
+        // TODO: load data
         //cout << line << ", RESP: " << processCmd(line.c_str()) << endl;
       }
     }
@@ -181,9 +195,13 @@ int load() {
 }
 int save() {
   cout << "Saving..." << endl;
-  datastore_mtx.lock();
   FILE* fp = fopen(DBFILE, "w");
+  datastore_mtx.lock();
+#ifdef SPARSEHASH
   datastore.serialize(StringToIntSerializer(), fp);
+#else
+  // TODO: tr1 serialize
+#endif
   datastore_mtx.unlock();
   fclose(fp);
   cout << "Done!" << endl;
@@ -226,8 +244,9 @@ int main(int argc, char *argv[]) {
 
   cout << "HOST KEY: " << hostKey << endl;
 
-  datastore.set_empty_key("");
-  datastore.resize(100);
+#ifdef SPARSEHASH
+  datastore.set_empty_key(string(""));
+#endif
 
   load();
 
@@ -250,19 +269,10 @@ int main(int argc, char *argv[]) {
         (struct sockaddr *) &cli_addr, &clilen);
     if (newsockfd < 0)
       error("ERROR on accept");
-    /*pid = fork();
-    if (pid < 0)
-      error("ERROR on fork");
-    if (pid == 0)  {
-      close(sockfd);
-      dostuff(newsockfd);
-      exit(0);
-    }
-    else close(newsockfd);*/
     boost::thread(dostuff, newsockfd);
-  } /* end of while */
+  }
   close(sockfd);
-  return 0; /* we never get here */
+  return 0;
 }
 
 /******** DOSTUFF() *********************
@@ -335,9 +345,9 @@ void Node::msgpack_unpack(msgpack::object o)
   std::tr1::unordered_map<string, msgpack::object> map;
   try {
     o.convert(&map);
-    map.find("host")->second.convert(&host);
-    map.find("port")->second.convert(&port);
-    map.find("key")->second.convert(&key);
+    map["host"].convert(&host);
+    map["port"].convert(&port);
+    map["key"].convert(&key);
   } catch (msgpack::type_error) {
   }
 }
@@ -419,8 +429,8 @@ string Node::introduceMyself() {
 
   try {
     obj3.convert(&map);
-    map.find("hash")->second.convert(&key);
-    map.find("knownNodes")->second.convert(&remoteKnownNodes);
+    map["hash"].convert(&key);
+    map["knownNodes"].convert(&remoteKnownNodes);
   } catch (msgpack::type_error) {
     return "ERR BAD CMD";
   }
@@ -456,8 +466,8 @@ string passOrOperateCmd(const char* buffer, tr1::unordered_map<string, msgpack::
   string cmd, key;
 
   try {
-    map.find("cmd")->second.convert(&cmd);
-    map.find("key")->second.convert(&key);
+    map["cmd"].convert(&cmd);
+    map["key"].convert(&key);
   } catch (msgpack::type_error) {
     return "ERR BAD CMD";
   }
@@ -486,7 +496,7 @@ string passOrOperateCmd(const char* buffer, tr1::unordered_map<string, msgpack::
   if (cmd == "SET") {
     string val;
     try {
-      map.find("val")->second.convert(&val);
+      map["val"].convert(&val);
     } catch (msgpack::type_error) {
       return "ERR BAD CMD";
     }
@@ -494,13 +504,13 @@ string passOrOperateCmd(const char* buffer, tr1::unordered_map<string, msgpack::
       resp = "ERR INVALID KEY";
     } else {
       datastore_mtx.lock();
-      datastore[key.c_str()] = val;
+      datastore[key] = val;
       datastore_mtx.unlock();
       resp = "OK";
     }
   } else if (cmd == "GET") {
     datastore_mtx.lock();
-    resp = datastore[key.c_str()];
+    resp = datastore[key];
     datastore_mtx.unlock();
     if (resp.size() == 0) resp = "ERR NOT FOUND";
   }
@@ -521,7 +531,7 @@ string processCmd(int sock, const char* buffer) {
   string cmd;
   try {
     obj.convert(&map);
-    map.find("cmd")->second.convert(&cmd);
+    map["cmd"].convert(&cmd);
   } catch (msgpack::type_error) {
     return "ERR BAD CMD";
   }
@@ -530,8 +540,8 @@ string processCmd(int sock, const char* buffer) {
     Node node;
 
     try {
-      map.find("host")->second.convert(&node.host);
-      map.find("port")->second.convert(&node.port);
+      map["host"].convert(&node.host);
+      map["port"].convert(&node.port);
     } catch (msgpack::type_error) {
       return "ERR BAD CMD";
     }
@@ -549,9 +559,9 @@ string processCmd(int sock, const char* buffer) {
     node.host = getSockIP(sock);
 
     try {
-      map.find("knownNodes")->second.convert(&remoteKnownNodes);
-      map.find("port")->second.convert(&node.port);
-      map.find("key")->second.convert(&node.key);
+      map["knownNodes"].convert(&remoteKnownNodes);
+      map["port"].convert(&node.port);
+      map["key"].convert(&node.key);
     } catch (msgpack::type_error) {
       return "ERR BAD CMD";
     }
@@ -571,6 +581,16 @@ string processCmd(int sock, const char* buffer) {
     pk2.pack(string("knownNodes"));
     pk2.pack(knownNodes);
     resp = string(buffer2.data());
+  } else if (cmd == "NODEKEYS") {
+    tr1::unordered_map<string, string> map;
+    vector<string> keys;
+    for(HASHTYPE::iterator it = datastore.begin(); it != datastore.end(); ++it) {
+      map[it->first] = it->second;
+    }
+    msgpack::sbuffer buf;
+    msgpack::packer<msgpack::sbuffer> pk(&buf);
+    pk.pack(map);
+    resp = buf.data();
   } else if (cmd == "NODES") {
     msgpack::sbuffer buf;
     msgpack::packer<msgpack::sbuffer> pk(&buf);

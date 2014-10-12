@@ -32,6 +32,9 @@ class Zero10DHT
       port: port.to_i
     })
   end
+  def nodekeys
+    MessagePack.unpack(send({cmd: 'NODEKEYS'}))
+  end
   def query cmd, key, val
     send({
       cmd: cmd,
