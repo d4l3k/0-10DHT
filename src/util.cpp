@@ -2,6 +2,9 @@
 #include <netinet/in.h>
 #include <util.hpp>
 #include <arpa/inet.h>
+#include <city.h>
+
+#include <boost/lexical_cast.hpp>
 
 string getSockIP(int s) {
   socklen_t len;
@@ -23,4 +26,17 @@ string getSockIP(int s) {
       inet_ntop(AF_INET6, &s->sin6_addr, ipstr, sizeof ipstr);
   }
   return ipstr;
+}
+
+uint64 CityHash64CXX(string str) {
+  return CityHash64(str.c_str(), str.size());
+}
+uint64 hashDistance(uint64 a, uint64 b) {
+  uint64 d = a - b;
+  uint64 e = UINT_MAX - (a - b);
+  if (d < e) {
+    return d;
+  } else {
+    return e;
+  }
 }

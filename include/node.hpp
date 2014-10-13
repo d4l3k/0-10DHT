@@ -1,5 +1,6 @@
 #include <msgpack.h>
 #include <string>
+#include <util.hpp>
 
 using namespace std;
 
@@ -15,6 +16,7 @@ class Node {
     template <typename Packer>
     void msgpack_pack(Packer&) const;
     void msgpack_unpack(msgpack::object);
+    int migrateKeys();
     bool equals(Node);
     string introduceMyself();
     friend std::ostream& operator<< (std::ostream&, Node const&);
@@ -130,4 +132,15 @@ string Node::introduceMyself() {
   addNodes(remoteKnownNodes);
 
   return "OK";
+}
+
+int Node::migrateKeys() {
+  for(HASHTYPE::iterator it = datastore.begin(); it != datastore.end(); ++it) {
+    uint64 keyHash = CityHash64Cxx(it->first);
+    uint64 distFromHost = hashDistance(hostKey,  keyHash);
+    uint64 distFromNode = hashDistance(key, keyHash);
+    if (distFromNode < distFromHost) {
+      // TODO: Move key
+    }
+  }
 }

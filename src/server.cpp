@@ -61,18 +61,6 @@ void error(const char *msg)
   exit(1);
 }
 
-uint64 CityHash64CXX(string str) {
-  return CityHash64(str.c_str(), str.size());
-}
-uint64 hashDistance(uint64 a, uint64 b) {
-  uint64 d = a - b;
-  uint64 e = UINT_MAX - (a - b);
-  if (d < e) {
-    return d;
-  } else {
-    return e;
-  }
-}
 
 
 struct StringToIntSerializer {
@@ -272,6 +260,12 @@ void dostuff (int sock)
 
 vector<Node> knownNodes;
 
+int migrateKeys() {
+  for(vector<Node>::iterator it = knownNodes.begin(); it != knownNodes.end(); ++it) {
+    it->migrateKeys();
+  }
+}
+
 int addNodes(vector<Node> nodes) {
   int added = 0;
   for(vector<Node>::iterator it = nodes.begin(); it != nodes.end(); ++it) {
@@ -287,6 +281,7 @@ int addNodes(vector<Node> nodes) {
       cout << "Adding node: " << *it << endl;
       added++;
       it->introduceMyself();
+      it->migrateKeys();
     }
   }
   return added;

@@ -3,7 +3,7 @@
 
 0/10 Distributed Hash Table. It'll probably lose your data and ruin your life.
 
-If you're okay with that feel free to try it out. It's designed to be an in memory database similar to Redis. This would really only excel at large quantities (more than can be stored on a single server) of temporary data.
+If you're okay with that feel free to try it out. It's designed to be an in memory database similar to Redis. This will really only excel at large quantities (more than can be stored on a single server) of temporary data.
 
 ## Commands
 
@@ -13,13 +13,15 @@ There is a reference implementation of the client written in Ruby in the `client
 
 ### Data Manipulation Commands
 
+The value needs to be a string.
+
 #### SET
 
 ```json
 {
   cmd: "SET",
   key: "<key>",
-  val: "<val>"
+  val: <val>
 }
 ```
 Returns `OK`.
