@@ -31,6 +31,7 @@ using google::dense_hash_map;
 #include <fstream>
 
 #include <server.hpp>
+#include <util.hpp>
 
 // Uses:
 
@@ -243,11 +244,7 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
-/******** DOSTUFF() *********************
- There is a separate instance of this function
- for each connection.  It handles all communication
- once a connnection has been established.
- *****************************************/
+// Handle connections.
 void dostuff (int sock)
 {
   while(true) {
@@ -273,31 +270,7 @@ void dostuff (int sock)
   }
 }
 
-string getSockIP(int s) {
-  socklen_t len;
-  struct sockaddr_storage addr;
-  char ipstr[INET6_ADDRSTRLEN];
-  int port;
-
-  len = sizeof addr;
-  getpeername(s, (struct sockaddr*)&addr, &len);
-
-  // deal with both IPv4 and IPv6:
-  if (addr.ss_family == AF_INET) {
-      struct sockaddr_in *s = (struct sockaddr_in *)&addr;
-      port = ntohs(s->sin_port);
-      inet_ntop(AF_INET, &s->sin_addr, ipstr, sizeof ipstr);
-  } else { // AF_INET6
-      struct sockaddr_in6 *s = (struct sockaddr_in6 *)&addr;
-      port = ntohs(s->sin6_port);
-      inet_ntop(AF_INET6, &s->sin6_addr, ipstr, sizeof ipstr);
-  }
-  return ipstr;
-}
-
-
 vector<Node> knownNodes;
-
 
 int addNodes(vector<Node> nodes) {
   int added = 0;
