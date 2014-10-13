@@ -1,11 +1,19 @@
 require 'msgpack'
 
 class Zero10DHT
+  attr_reader :host, :port
   def initialize host, port
+    @host = host
+    @port = port
     @sock = TCPSocket.new(host, port)
   end
   def nodes
-    MessagePack.unpack(send({cmd: 'NODES'}))
+    resp = send({cmd: 'NODES'})
+    begin
+      MessagePack.unpack(resp)
+    rescue
+      MessagePack.unpack(resp[0..-2])
+    end
   end
   def set key, value
     send({
