@@ -1,5 +1,3 @@
-#define SPARSEHASH
-#define DEBUG
 
 #include <stdio.h>
 #include <unistd.h>
@@ -10,11 +8,6 @@
 #include <iostream>
 #include <msgpack.hpp>
 #include <netinet/in.h>
-
-#ifdef SPARSEHASH
-#include <sparsehash/dense_hash_map>
-using google::dense_hash_map;
-#endif
 
 #include <boost/thread.hpp>
 #include <boost/lexical_cast.hpp>
@@ -30,6 +23,8 @@ using google::dense_hash_map;
 #include <iostream>
 #include <fstream>
 
+#include <defines.hpp>
+
 #include <server.hpp>
 #include <util.hpp>
 
@@ -39,15 +34,9 @@ using namespace std;
 
 using std::cout;
 using std::endl;
-using tr1::hash;  // or __gnu_cxx::hash, or maybe tr1::hash, depending on your OS
 
 // Global Variables:
 
-#ifdef SPARSEHASH
-#define HASHTYPE dense_hash_map<string, string, hash<string>, eqstring>
-#else
-#define HASHTYPE tr1::unordered_map<string, string>
-#endif
 HASHTYPE datastore;
 boost::mutex datastore_mtx;
 

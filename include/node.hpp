@@ -2,9 +2,12 @@
 #include <string>
 #include <util.hpp>
 
+#include <defines.hpp>
+
 using namespace std;
 
 uint64 extern hostKey;
+HASHTYPE extern datastore;
 
 
 class Node {
@@ -136,10 +139,13 @@ string Node::introduceMyself() {
 
 int Node::migrateKeys() {
   for(HASHTYPE::iterator it = datastore.begin(); it != datastore.end(); ++it) {
-    uint64 keyHash = CityHash64Cxx(it->first);
+    uint64 keyHash = CityHash64CXX(it->first);
     uint64 distFromHost = hashDistance(hostKey,  keyHash);
     uint64 distFromNode = hashDistance(key, keyHash);
     if (distFromNode < distFromHost) {
+      msgpack::sbuffer sbuf;
+      packSetCmd(&sbuf, it->first, it->second);
+      sendMessage(string(sbuf.data()));
       // TODO: Move key
     }
   }

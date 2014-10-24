@@ -3,6 +3,8 @@
 #include <util.hpp>
 #include <arpa/inet.h>
 #include <city.h>
+#include <msgpack.hpp>
+#include "msgpack/type/tr1/unordered_map.hpp"
 
 #include <boost/lexical_cast.hpp>
 
@@ -39,4 +41,16 @@ uint64 hashDistance(uint64 a, uint64 b) {
   } else {
     return e;
   }
+}
+
+
+void packSetCmd(msgpack::sbuffer *sbuf, string key, string val) {
+  msgpack::packer<msgpack::sbuffer> pk2(sbuf);
+  pk2.pack_map(3);
+  pk2.pack(string("cmd"));
+  pk2.pack(string("SET"));
+  pk2.pack(string("key"));
+  pk2.pack(string(key));
+  pk2.pack(string("val"));
+  pk2.pack(val);
 }
